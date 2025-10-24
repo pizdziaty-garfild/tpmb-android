@@ -48,7 +48,7 @@ pkg update -y && pkg upgrade -y
 
 # Install required system packages
 log_info "Installing system dependencies..."
-pkg install -y python python-dev git openssl openssl-dev libffi libffi-dev clang make cmake curl wget
+pkg install -y python git openssl libffi clang make cmake curl wget rust
 
 # Install additional build tools for Android
 log_info "Installing Android build tools..."
