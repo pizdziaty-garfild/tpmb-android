@@ -1,0 +1,31 @@
+# Core dependencies for TPMB Android
+python-telegram-bot>=20.0
+aiohttp>=3.8.0
+aiofiles>=22.1.0
+
+# Security and encryption
+cryptography>=41.0.0
+certifi>=2023.7.22
+pyopenssl>=23.0.0
+
+# Time handling and scheduling  
+APScheduler>=3.10.0
+ntplib>=0.4.0
+pytz>=2023.3
+
+# Enhanced logging and monitoring
+colorama>=0.4.6
+psutil>=5.9.0
+
+# Network and HTTP security
+requests>=2.31.0
+urllib3>=2.0.0
+
+# Android/Termux compatibility
+setuptools>=68.0.0
+wheel>=0.41.0
+pip>=23.0.0
+
+# Optional: Performance monitoring (install separately if needed)
+# memory_profiler>=0.60.0
+# py-spy>=0.3.14
