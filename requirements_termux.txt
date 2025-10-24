@@ -1,0 +1,33 @@
+# Termux-optimized requirements for TPMB Android
+# Zaktualizowane zależności dla stabilnej pracy w Termux
+
+# Core Telegram Bot
+python-telegram-bot>=20.0,<21.0
+
+# HTTP and Async Support  
+aiohttp>=3.8.0,<3.10.0
+aiofiles>=22.1.0,<24.0.0
+
+# Security (use system cryptography if possible)
+certifi>=2023.7.22
+requests>=2.31.0,<3.0.0
+urllib3>=2.0.0,<3.0.0
+
+# Time and Scheduling
+APScheduler>=3.10.0,<4.0.0
+pytz>=2023.3
+
+# Monitoring and Logging (lightweight)
+colorama>=0.4.6,<0.5.0
+psutil>=5.9.0,<6.0.0
+
+# Build tools (essential)
+setuptools>=68.0.0
+wheel>=0.41.0
+
+# Optional: Install cryptography separately if not available systemically
+# cryptography>=41.0.0,<42.0.0
+
+# Optional: Performance monitoring (install separately if needed)
+# memory_profiler>=0.60.0
+# py-spy>=0.3.14
