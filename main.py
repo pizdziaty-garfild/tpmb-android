@@ -5,6 +5,7 @@ import os
 import json
 import signal
 import sys
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional, List
@@ -14,7 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import colorama
 from colorama import Fore, Style
 from utils.time_handler import ResilientScheduler
-from utils.security_manager import SecurityManager, SecureConfigManager
+from utils.security_manager import SecurityManager, SecureConfigManager, SecurityError
 from utils.bot_controller import BotController
 from utils.multi_instance_manager import MultiInstanceManager
 
@@ -30,12 +31,14 @@ class AndroidTelegramBot:
     - Remote bot control via Telegram commands
     - Secure token management
     - Network error handling with retry logic
+    - Enhanced security (2024 standards)
     """
     
     def __init__(self, instance_name: str = "default"):
         self.instance_name = instance_name
         self.config_dir = Path(f"instances/{instance_name}/config")
         self.logs_dir = Path(f"instances/{instance_name}/logs")
+        self.start_time = datetime.now()
         
         # Create instance directories
         self.config_dir.mkdir(parents=True, exist_ok=True)
@@ -52,9 +55,8 @@ class AndroidTelegramBot:
         self.is_running = False
         self.messaging_active = False
         
-        # Signal handling for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        # Android-compatible signal handling
+        self._setup_signal_handlers()
         
         self.load_config()
         
@@ -77,61 +79,138 @@ class AndroidTelegramBot:
         
         self.logger = logging.getLogger(__name__)
         
+    def _setup_signal_handlers(self):
+        """Setup Android-compatible signal handlers"""
+        try:
+            # Standard signals
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            
+            # Android-specific handling
+            if hasattr(signal, 'SIGUSR1'):
+                signal.signal(signal.SIGUSR1, self._signal_handler)
+                
+        except (AttributeError, OSError) as e:
+            self.logger.warning(f"Some signal handlers not available on this platform: {e}")
+        
     def load_config(self):
-        """Load configuration with secure fallbacks"""
+        """Load configuration with enhanced error handling"""
         try:
             # Migrate from plaintext if needed
-            self.config_manager.migrate_plaintext_token()
+            try:
+                self.config_manager.migrate_plaintext_token()
+            except SecurityError as e:
+                self.logger.error(f"Token migration failed: {e}")
             
-            # Load messages
+            # Load messages with validation
             messages_file = self.config_dir / 'messages.txt'
             if messages_file.exists():
-                with open(messages_file, 'r', encoding='utf-8') as f:
-                    self.messages = [line.strip() for line in f if line.strip()]
+                try:
+                    with open(messages_file, 'r', encoding='utf-8') as f:
+                        messages = [line.strip() for line in f if line.strip()]
+                        # Sanitize messages
+                        self.messages = [self._sanitize_message(msg) for msg in messages if msg]
+                except Exception as e:
+                    self.logger.error(f"Failed to load messages: {e}")
+                    self.messages = ["Default message"]
             else:
                 self.messages = ["Testowa wiadomość"]
                 
-            # Load groups 
+            # Load groups with validation
             groups_file = self.config_dir / 'groups.txt'
             if groups_file.exists():
-                with open(groups_file, 'r', encoding='utf-8') as f:
-                    self.groups = [line.strip() for line in f if line.strip()]
+                try:
+                    with open(groups_file, 'r', encoding='utf-8') as f:
+                        groups = [line.strip() for line in f if line.strip()]
+                        # Validate group IDs
+                        self.groups = [group for group in groups if self._validate_group_id(group)]
+                except Exception as e:
+                    self.logger.error(f"Failed to load groups: {e}")
+                    self.groups = []
             else:
                 self.groups = []
                 
-            # Load settings
+            # Load settings with validation
             settings_file = self.config_dir / 'settings.txt'
-            self.interval_minutes = 1
+            self.interval_minutes = 5  # Default safe interval
             self.admin_ids = []
             
             if settings_file.exists():
-                with open(settings_file, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        if '=' in line:
-                            key, value = line.strip().split('=', 1)
-                            if key == 'interval_minutes':
-                                self.interval_minutes = int(value)
-                            elif key == 'admin_ids':
-                                self.admin_ids = [int(x.strip()) for x in value.split(',') if x.strip().isdigit()]
+                try:
+                    with open(settings_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            if '=' in line:
+                                key, value = line.strip().split('=', 1)
+                                key = key.strip()
+                                value = value.strip()
                                 
+                                if key == 'interval_minutes':
+                                    try:
+                                        interval = int(value)
+                                        if 1 <= interval <= 1440:  # 1 minute to 24 hours
+                                            self.interval_minutes = interval
+                                    except ValueError:
+                                        self.logger.warning(f"Invalid interval value: {value}")
+                                        
+                                elif key == 'admin_ids':
+                                    try:
+                                        admin_ids = [int(x.strip()) for x in value.split(',') if x.strip().isdigit()]
+                                        # Validate admin IDs (reasonable Telegram user ID range)
+                                        self.admin_ids = [uid for uid in admin_ids if 1 <= uid <= 9999999999]
+                                    except ValueError:
+                                        self.logger.warning(f"Invalid admin IDs: {value}")
+                except Exception as e:
+                    self.logger.error(f"Failed to load settings: {e}")
+                    
         except Exception as e:
             self.logger.error(f"Config loading failed: {e}")
             # Fallback values
             self.messages = ["Fallback message"]
             self.groups = []
-            self.interval_minutes = 1
+            self.interval_minutes = 5
             self.admin_ids = []
             
+    def _sanitize_message(self, message: str) -> str:
+        """Sanitize message content for security"""
+        if not message or len(message) > 4000:
+            return "Invalid message"
+            
+        # Remove potentially dangerous characters but keep Telegram formatting
+        # Allow basic Telegram HTML tags
+        allowed_pattern = re.compile(r'[^<>&\n\r\t\x00-\x1f\x7f-\x9f]|</?[bi]>|</?code>|</?pre>', re.IGNORECASE)
+        sanitized = ''.join(allowed_pattern.findall(message))
+        
+        return sanitized[:4000]  # Telegram limit
+        
+    def _validate_group_id(self, group_id: str) -> bool:
+        """Validate Telegram group ID format"""
+        if not group_id:
+            return False
+            
+        # Telegram group IDs are negative numbers, often starting with -100
+        if group_id.startswith('-') and group_id[1:].isdigit():
+            try:
+                gid = int(group_id)
+                # Reasonable range for Telegram group IDs
+                return -9999999999999 <= gid <= -1
+            except ValueError:
+                return False
+        return False
+            
     def save_config(self):
-        """Save current configuration to files"""
+        """Save current configuration to files with error handling"""
         try:
             # Save messages
             with open(self.config_dir / 'messages.txt', 'w', encoding='utf-8') as f:
-                f.write('\n'.join(self.messages))
+                for message in self.messages:
+                    sanitized = self._sanitize_message(message)
+                    f.write(sanitized + '\n')
                 
             # Save groups
             with open(self.config_dir / 'groups.txt', 'w', encoding='utf-8') as f:
-                f.write('\n'.join(self.groups))
+                for group in self.groups:
+                    if self._validate_group_id(group):
+                        f.write(group + '\n')
                 
             # Save settings
             with open(self.config_dir / 'settings.txt', 'w', encoding='utf-8') as f:
@@ -144,15 +223,18 @@ class AndroidTelegramBot:
             self.logger.error(f"Failed to save config: {e}")
             
     async def initialize(self):
-        """Secure bot initialization"""
+        """Secure bot initialization with enhanced error handling"""
         try:
             # Setup secure directories
             self.config_manager.setup_secure_directories()
             
             # Create secure bot for messaging
-            self.bot = await self.security_manager.create_secure_bot(
-                self.config_manager.get_token()
-            )
+            try:
+                token = self.config_manager.get_token()
+                self.bot = await self.security_manager.create_secure_bot(token)
+            except SecurityError as e:
+                self.logger.error(f"Failed to create secure bot: {e}")
+                return False
             
             # Create application for command handling
             self.app = Application.builder().bot(self.bot).build()
@@ -162,13 +244,14 @@ class AndroidTelegramBot:
             
             # Verify connections
             if not await self.security_manager.verify_bot_connection(self.bot):
-                raise ConnectionError("Bot connection verification failed")
+                self.logger.error("Bot connection verification failed")
+                return False
                 
             # Initialize scheduler
             await self.scheduler.initialize()
             
             self.is_running = True
-            self.logger.info("Bot initialized successfully")
+            self.logger.info("Bot initialized successfully with enhanced security")
             
             return True
             
@@ -188,6 +271,10 @@ class AndroidTelegramBot:
             CommandHandler("list_groups", self.bot_controller.list_groups_command),
             CommandHandler("set_message", self.bot_controller.set_message_command),
             CommandHandler("get_message", self.bot_controller.get_message_command),
+            # Additional control commands
+            CommandHandler("restart", self.bot_controller.restart_command),
+            CommandHandler("help", self.bot_controller.help_command),
+            CommandHandler("info", self.bot_controller.info_command),
         ]
         
         for handler in handlers:
@@ -261,6 +348,14 @@ class AndroidTelegramBot:
             
         self.logger.info("Messaging stopped")
         
+    async def restart_messaging(self):
+        """Restart messaging system"""
+        was_active = self.messaging_active
+        await self.stop_messaging()
+        if was_active:
+            await self.start_messaging()
+            self.logger.info("Messaging restarted")
+        
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals"""
         print(f"{Fore.YELLOW}Received signal {signum}, shutting down...{Style.RESET_ALL}")
@@ -301,7 +396,7 @@ class AndroidTelegramBot:
             
         print(f"{Fore.CYAN}=== TPMB ANDROID [{self.instance_name.upper()}] ==={Style.RESET_ALL}")
         print(f"📱 Android optimized: YES") 
-        print(f"🔒 Security: ENABLED")
+        print(f"🔒 Security: ENHANCED (2024 standards)")
         print(f"⏰ Time sync: ACTIVE")
         print(f"🌐 TLS/HTTPS: ENFORCED")
         print(f"📊 Instance: {self.instance_name}")
